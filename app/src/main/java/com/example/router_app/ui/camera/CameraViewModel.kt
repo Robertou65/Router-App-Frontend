@@ -43,10 +43,17 @@ class CameraViewModel(
     private val _lastOcrText = MutableStateFlow("")
     val lastOcrText: StateFlow<String> = _lastOcrText
 
+    private val _existingRouteId = MutableStateFlow<Long?>(null)
+    val existingRouteId: StateFlow<Long?> = _existingRouteId
+
     fun requestScan() {
         if (_scanState.value is ScanState.Idle && !_sessionPanelState.value.isOpen) {
             _scanState.value = ScanState.Scanning
         }
+    }
+
+    fun setExistingRoute(routeId: Long) {
+        _existingRouteId.value = routeId
     }
 
     fun openSessionPanel() {

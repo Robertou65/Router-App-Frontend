@@ -35,8 +35,29 @@ fun RouterNavHost() {
                 onBack = { navController.popBackStack() },
             )
         }
+        composable(
+            route = "${Routes.CameraEdit}/{routeId}",
+            arguments = listOf(navArgument("routeId") { type = NavType.LongType }),
+        ) { backStackEntry ->
+            val routeId = backStackEntry.arguments?.getLong("routeId") ?: 0L
+            val cameraViewModel: CameraViewModel = viewModel()
+            androidx.compose.runtime.LaunchedEffect(routeId) {
+                cameraViewModel.setExistingRoute(routeId)
+            }
+            CameraScreen(
+                onFinish = { navController.navigate(Routes.SaveExport) },
+                onBack = { navController.popBackStack() },
+            )
+        }
         composable(Routes.SaveExport) {
-            val cameraEntry = remember(navController) { navController.getBackStackEntry(Routes.Camera) }
+            @Suppress("UnrememberedGetBackStackEntry")
+            val cameraEntry = remember(navController) {
+                try {
+                    navController.getBackStackEntry("${Routes.CameraEdit}/{routeId}")
+                } catch (e: IllegalArgumentException) {
+                    navController.getBackStackEntry(Routes.Camera)
+                }
+            }
             val cameraViewModel: CameraViewModel = viewModel(cameraEntry)
             SaveExportScreen(
                 cameraViewModel = cameraViewModel,
@@ -56,6 +77,9 @@ fun RouterNavHost() {
             RouteDetailScreen(
                 routeId = routeId,
                 onBack = { navController.popBackStack() },
+                onAddStops = { id ->
+                    navController.navigate("${Routes.CameraEdit}/$id")
+                },
             )
         }
     }

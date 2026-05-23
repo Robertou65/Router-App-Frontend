@@ -57,6 +57,7 @@ fun SaveExportScreen(
 ) {
     val context = LocalContext.current
     val stops by cameraViewModel.sessionStops.collectAsState()
+    val existingRouteId by cameraViewModel.existingRouteId.collectAsState()
     val now = remember { Date() }
     val defaultRouteName = remember(now) {
         "Route - ${SimpleDateFormat("MMM dd - HH:mm", Locale.getDefault()).format(now)}"
@@ -84,145 +85,207 @@ fun SaveExportScreen(
         }
     }
 
-    Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(text = "Save & Export", style = MaterialTheme.typography.titleLarge)
-
-        OutlinedTextField(
-            value = routeName,
-            onValueChange = { routeName = it },
-            label = { Text(text = "Route name") },
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        OutlinedTextField(
-            value = csvFileName,
-            onValueChange = { csvFileName = it },
-            label = { Text(text = "CSV filename") },
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = { folderPicker.launch(null) }) {
-                Text(text = "Pick folder")
-            }
-            Spacer(modifier = Modifier.width(12.dp))
-            Text(
-                text = selectedFolderUri?.toString() ?: "No folder selected",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-
-        Text(text = "Stops", style = MaterialTheme.typography.titleMedium)
-        if (stops.isEmpty()) {
-            Text(text = "No scanned stops", style = MaterialTheme.typography.bodyMedium)
-        } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                itemsIndexed(stops) { index, stop ->
-                    Text(text = "${index + 1}. ${stop.address}")
-                }
-            }
-        }
-
-        SnackbarHost(hostState = snackbarHostState)
-
-        Button(
-            onClick = {
-                val db = AppDatabase.getInstance(context)
-                scope.launch {
-                    isSaving = true
-                    withContext(Dispatchers.IO) {
-                        val routeId = db.routeDao().insert(
-                            Route(
-                                name = routeName.ifBlank { defaultRouteName },
-                                createdAt = System.currentTimeMillis(),
-                            ),
-                        )
-                        val stopsToInsert = stops.mapIndexed { index, stop ->
-                            stop.copy(routeId = routeId, order = index + 1)
-                        }
-                        stopsToInsert.forEach { db.stopDao().insert(it) }
-                    }
-                    isSaving = false
-                    onSaveComplete()
-                }
-            },
-            enabled = stops.isNotEmpty() && !isSaving && !isExporting,
-            modifier = Modifier.fillMaxWidth(),
+    if (existingRouteId != null) {
+        // Edit mode
+        Column(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (isSaving) {
-                CircularProgressIndicator(modifier = Modifier.height(20.dp))
+            Text(text = "Add Stops to Route", style = MaterialTheme.typography.titleLarge)
+            
+            Text(text = "New stops to add:", style = MaterialTheme.typography.titleMedium)
+            if (stops.isEmpty()) {
+                Text(text = "No scanned stops", style = MaterialTheme.typography.bodyMedium)
             } else {
-                Text(text = "Save Route")
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    itemsIndexed(stops) { index, stop ->
+                        Text(text = "${index + 1}. ${stop.address}")
+                    }
+                }
+            }
+
+            SnackbarHost(hostState = snackbarHostState)
+
+            Button(
+                onClick = {
+                    val db = AppDatabase.getInstance(context)
+                    scope.launch {
+                        isSaving = true
+                        withContext(Dispatchers.IO) {
+                            val existingStops = db.stopDao().getByRouteId(existingRouteId!!)
+                            val startOrder = existingStops.size + 1
+                            val stopsToInsert = stops.mapIndexed { index, stop ->
+                                stop.copy(
+                                    routeId = existingRouteId!!,
+                                    order = startOrder + index,
+                                    id = 0L
+                                )
+                            }
+                            stopsToInsert.forEach { db.stopDao().insert(it) }
+                        }
+                        isSaving = false
+                        onSaveComplete()
+                    }
+                },
+                enabled = stops.isNotEmpty() && !isSaving,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (isSaving) {
+                    CircularProgressIndicator(modifier = Modifier.height(20.dp))
+                } else {
+                    Text(text = "Save to Route")
+                }
+            }
+
+            Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
+                Text(text = "Back")
             }
         }
+    } else {
+        // Create mode
+        Column(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(text = "Save & Export", style = MaterialTheme.typography.titleLarge)
 
-        Button(
-            onClick = {
-                val folderUri = selectedFolderUri
-                if (folderUri == null) {
-                    scope.launch { snackbarHostState.showSnackbar("Please select a folder first.") }
-                    return@Button
+            OutlinedTextField(
+                value = routeName,
+                onValueChange = { routeName = it },
+                label = { Text(text = "Route name") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            OutlinedTextField(
+                value = csvFileName,
+                onValueChange = { csvFileName = it },
+                label = { Text(text = "CSV filename") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Button(onClick = { folderPicker.launch(null) }) {
+                    Text(text = "Pick folder")
                 }
-                if (stops.isEmpty()) {
-                    scope.launch { snackbarHostState.showSnackbar("No stops to export.") }
-                    return@Button
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = selectedFolderUri?.toString() ?: "No folder selected",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            Text(text = "Stops", style = MaterialTheme.typography.titleMedium)
+            if (stops.isEmpty()) {
+                Text(text = "No scanned stops", style = MaterialTheme.typography.bodyMedium)
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    itemsIndexed(stops) { index, stop ->
+                        Text(text = "${index + 1}. ${stop.address}")
+                    }
                 }
-                scope.launch {
-                    isExporting = true
-                    val csv = CsvExporter.buildCsv(stops)
-                    val finalFileName = csvFileName.ifBlank { defaultCsvName }
-                    val created = withContext(Dispatchers.IO) {
-                        val folder = DocumentFile.fromTreeUri(context, folderUri)
-                        val existing = folder?.findFile(finalFileName)
-                        existing?.delete()
-                        folder?.createFile("text/csv", finalFileName)
+            }
+
+            SnackbarHost(hostState = snackbarHostState)
+
+            Button(
+                onClick = {
+                    val db = AppDatabase.getInstance(context)
+                    scope.launch {
+                        isSaving = true
+                        withContext(Dispatchers.IO) {
+                            val routeId = db.routeDao().insert(
+                                Route(
+                                    name = routeName.ifBlank { defaultRouteName },
+                                    createdAt = System.currentTimeMillis(),
+                                ),
+                            )
+                            val stopsToInsert = stops.mapIndexed { index, stop ->
+                                stop.copy(routeId = routeId, order = index + 1)
+                            }
+                            stopsToInsert.forEach { db.stopDao().insert(it) }
+                        }
+                        isSaving = false
+                        onSaveComplete()
                     }
-                    if (created == null) {
-                        isExporting = false
-                        snackbarHostState.showSnackbar("Unable to create file in selected folder.")
-                        return@launch
+                },
+                enabled = stops.isNotEmpty() && !isSaving && !isExporting,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (isSaving) {
+                    CircularProgressIndicator(modifier = Modifier.height(20.dp))
+                } else {
+                    Text(text = "Save Route")
+                }
+            }
+
+            Button(
+                onClick = {
+                    val folderUri = selectedFolderUri
+                    if (folderUri == null) {
+                        scope.launch { snackbarHostState.showSnackbar("Please select a folder first.") }
+                        return@Button
                     }
-                    withContext(Dispatchers.IO) {
-                        context.contentResolver.openOutputStream(created.uri, "w")?.use { out ->
-                            out.write(csv.toByteArray(Charsets.UTF_8))
+                    if (stops.isEmpty()) {
+                        scope.launch { snackbarHostState.showSnackbar("No stops to export.") }
+                        return@Button
+                    }
+                    scope.launch {
+                        isExporting = true
+                        val csv = CsvExporter.buildCsv(stops)
+                        val finalFileName = csvFileName.ifBlank { defaultCsvName }
+                        val created = withContext(Dispatchers.IO) {
+                            val folder = DocumentFile.fromTreeUri(context, folderUri)
+                            val existing = folder?.findFile(finalFileName)
+                            existing?.delete()
+                            folder?.createFile("text/csv", finalFileName)
+                        }
+                        if (created == null) {
+                            isExporting = false
+                            snackbarHostState.showSnackbar("Unable to create file in selected folder.")
+                            return@launch
+                        }
+                        withContext(Dispatchers.IO) {
+                            context.contentResolver.openOutputStream(created.uri, "w")?.use { out ->
+                                out.write(csv.toByteArray(Charsets.UTF_8))
+                            }
+                            val cacheFile = File(context.cacheDir, finalFileName)
+                            cacheFile.writeText(csv, Charsets.UTF_8)
                         }
                         val cacheFile = File(context.cacheDir, finalFileName)
-                        cacheFile.writeText(csv, Charsets.UTF_8)
+                        val shareUri = FileProvider.getUriForFile(
+                            context,
+                            "${context.packageName}.fileprovider",
+                            cacheFile,
+                        )
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/csv"
+                            putExtra(Intent.EXTRA_STREAM, shareUri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        context.startActivity(Intent.createChooser(intent, "Export to Routin"))
+                        isExporting = false
                     }
-                    val cacheFile = File(context.cacheDir, finalFileName)
-                    val shareUri = FileProvider.getUriForFile(
-                        context,
-                        "${context.packageName}.fileprovider",
-                        cacheFile,
-                    )
-                    val intent = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/csv"
-                        putExtra(Intent.EXTRA_STREAM, shareUri)
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    }
-                    context.startActivity(Intent.createChooser(intent, "Export to Routin"))
-                    isExporting = false
+                },
+                enabled = stops.isNotEmpty() && !isSaving && !isExporting,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (isExporting) {
+                    CircularProgressIndicator(modifier = Modifier.height(20.dp))
+                } else {
+                    Text(text = "Export to Routin")
                 }
-            },
-            enabled = stops.isNotEmpty() && !isSaving && !isExporting,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            if (isExporting) {
-                CircularProgressIndicator(modifier = Modifier.height(20.dp))
-            } else {
-                Text(text = "Export to Routin")
             }
-        }
 
-        Spacer(modifier = Modifier.height(8.dp))
-        Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-            Text(text = "Back")
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
+                Text(text = "Back")
+            }
         }
     }
 }

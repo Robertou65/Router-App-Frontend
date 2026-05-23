@@ -32,6 +32,7 @@ import java.io.File
 fun RouteDetailScreen(
     routeId: Long,
     onBack: () -> Unit,
+    onAddStops: (Long) -> Unit,
 ) {
     val viewModel: RouteDetailViewModel = viewModel()
     val uiState by viewModel.uiState.collectAsState()
@@ -95,6 +96,13 @@ fun RouteDetailScreen(
                     }
                 }
             }
+        }
+
+        Button(
+            onClick = { onAddStops(routeId) },
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+        ) {
+            Text(text = "Add More Stops")
         }
 
         Button(
