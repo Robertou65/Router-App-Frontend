@@ -14,4 +14,7 @@ interface StopDao {
 
     @Query("DELETE FROM stops WHERE routeId = :routeId")
     suspend fun deleteByRouteId(routeId: Long)
+
+    @Query("DELETE FROM stops WHERE id = :stopId")
+    suspend fun deleteById(stopId: Long)
 }

@@ -269,6 +269,11 @@ fun SaveExportScreen(
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         }
                         context.startActivity(Intent.createChooser(intent, "Export to Routin"))
+                        withContext(Dispatchers.IO) {
+                            context.cacheDir.listFiles()
+                                ?.filter { it.extension == "csv" && it.lastModified() < System.currentTimeMillis() - 3_600_000L }
+                                ?.forEach { it.delete() }
+                        }
                         isExporting = false
                     }
                 },

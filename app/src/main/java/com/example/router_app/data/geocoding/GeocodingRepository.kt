@@ -13,7 +13,22 @@ class GeocodingRepository(
         .build()
         .create(GeocodingApiService::class.java),
 ) {
+    private val cache = object : LinkedHashMap<String, GeocodingResult.Success>(
+        16, 0.75f, true  // access-order = true → LRU
+    ) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, GeocodingResult.Success>
+        ): Boolean = size > 50
+    }
+
     suspend fun geocodeAddress(address: String): GeocodingResult {
+        val key = address.trim().lowercase()
+
+        // Check cache first
+        val cached = synchronized(cache) { cache[key] }
+        cached?.let { return it }
+
+        // Cache miss — call the API
         return try {
             val response = api.geocode(address, BuildConfig.GOOGLE_MAPS_API_KEY)
             when (response.status) {
@@ -22,7 +37,9 @@ class GeocodingRepository(
                     if (location == null) {
                         GeocodingResult.Error(GeocodingResult.ErrorType.AddressNotFound)
                     } else {
-                        GeocodingResult.Success(location.lat, location.lng)
+                        val result = GeocodingResult.Success(location.lat, location.lng)
+                        synchronized(cache) { cache[key] = result }
+                        result
                     }
                 }
                 "ZERO_RESULTS" -> GeocodingResult.Error(GeocodingResult.ErrorType.AddressNotFound)

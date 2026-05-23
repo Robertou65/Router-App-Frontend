@@ -23,12 +23,28 @@ class RouteDetailViewModel(application: Application) : AndroidViewModel(applicat
     private val _uiState = MutableStateFlow(RouteDetailUiState())
     val uiState: StateFlow<RouteDetailUiState> = _uiState
 
+    private val _deletingStopIds = MutableStateFlow<Set<Long>>(emptySet())
+    val deletingStopIds: StateFlow<Set<Long>> = _deletingStopIds
+
     fun load(routeId: Long) {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(isLoading = true)
             val route = db.routeDao().getById(routeId)
             val stops = db.stopDao().getByRouteId(routeId)
             _uiState.value = RouteDetailUiState(route = route, stops = stops, isLoading = false)
+        }
+    }
+
+    fun removeStop(stopId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _deletingStopIds.value = _deletingStopIds.value + stopId
+            db.stopDao().deleteById(stopId)
+            // Reload stops after deletion
+            val updatedStops = db.stopDao().getByRouteId(
+                _uiState.value.route?.id ?: return@launch
+            )
+            _uiState.value = _uiState.value.copy(stops = updatedStops)
+            _deletingStopIds.value = _deletingStopIds.value - stopId
         }
     }
 }

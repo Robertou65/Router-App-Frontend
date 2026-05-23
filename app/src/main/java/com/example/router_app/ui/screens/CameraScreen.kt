@@ -36,6 +36,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -126,6 +127,8 @@ private fun CameraScreenContent(
     val isBusy = scanState !is CameraViewModel.ScanState.Idle
     val listState = rememberLazyListState()
     var stopPendingRemoval by remember { mutableStateOf<Stop?>(null) }
+    var showManualInput by remember { mutableStateOf(false) }
+    var manualAddressText by remember { mutableStateOf("") }
 
     BackHandler(enabled = sessionPanelState.isOpen) {
         viewModel.closeSessionPanel()
@@ -179,6 +182,16 @@ private fun CameraScreenContent(
                     }
                     Spacer(modifier = Modifier.height(12.dp))
                     Button(
+                        onClick = {
+                            manualAddressText = ""
+                            showManualInput = true
+                        },
+                        enabled = scanState is CameraViewModel.ScanState.Idle,
+                    ) {
+                        Text(text = "Type Address")
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
                         onClick = onFinish,
                         enabled = sessionStops.isNotEmpty() && !isBusy,
                     ) {
@@ -215,6 +228,41 @@ private fun CameraScreenContent(
             },
             dismissButton = {
                 Button(onClick = { stopPendingRemoval = null }) {
+                    Text(text = "Cancel")
+                }
+            },
+        )
+    }
+
+    if (showManualInput) {
+        AlertDialog(
+            onDismissRequest = { showManualInput = false },
+            title = { Text(text = "Enter address manually") },
+            text = {
+                OutlinedTextField(
+                    value = manualAddressText,
+                    onValueChange = { manualAddressText = it },
+                    label = { Text(text = "Address") },
+                    placeholder = { Text(text = "e.g. Carrera 18b # 32-06 Sur, Bogotá") },
+                    singleLine = false,
+                    maxLines = 3,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showManualInput = false
+                        viewModel.onManualAddress(manualAddressText.trim())
+                        manualAddressText = ""
+                    },
+                    enabled = manualAddressText.isNotBlank(),
+                ) {
+                    Text(text = "Search")
+                }
+            },
+            dismissButton = {
+                Button(onClick = { showManualInput = false }) {
                     Text(text = "Cancel")
                 }
             },

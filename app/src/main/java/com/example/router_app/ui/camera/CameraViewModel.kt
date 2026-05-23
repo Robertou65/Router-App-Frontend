@@ -138,6 +138,40 @@ class CameraViewModel(
         }
     }
 
+    fun onManualAddress(address: String) {
+        if (_scanState.value !is ScanState.Idle) return
+        if (address.isBlank()) return
+
+        _scanState.value = ScanState.Requesting
+
+        viewModelScope.launch {
+            when (val result = geocodingRepository.geocodeAddress(address)) {
+                is GeocodingResult.Success -> {
+                    val stop = Stop(
+                        id = -(_sessionStops.value.size + 1L),
+                        routeId = 0L,
+                        label = "Package #${_sessionStops.value.size + 1}",
+                        rawOcrText = address,
+                        address = address,
+                        lat = result.lat,
+                        lng = result.lng,
+                        order = _sessionStops.value.size + 1,
+                    )
+                    _sessionStops.value = _sessionStops.value + stop
+                    succeedWith(stop)
+                }
+                is GeocodingResult.Error -> {
+                    val reason = when (result.type) {
+                        GeocodingResult.ErrorType.AddressNotFound -> "Address not found"
+                        GeocodingResult.ErrorType.ApiKeyError -> "API key error"
+                        GeocodingResult.ErrorType.ConnectionError -> "Connection error"
+                    }
+                    failWith(reason)
+                }
+            }
+        }
+    }
+
     private fun succeedWith(stop: Stop) {
         _scanState.value = ScanState.Success(stop)
         viewModelScope.launch {
