@@ -100,6 +100,7 @@ class CameraViewModel(
             when (val result = geocodingRepository.geocodeAddress(parsed.address)) {
                 is GeocodingResult.Success -> {
                     val stop = Stop(
+                        id = -(_sessionStops.value.size + 1L),
                         routeId = 0L,
                         label = "Package #${_sessionStops.value.size + 1}",
                         rawOcrText = text,

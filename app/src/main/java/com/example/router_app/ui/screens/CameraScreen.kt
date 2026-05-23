@@ -285,7 +285,7 @@ private fun SessionAddressPanel(
                 modifier = Modifier.fillMaxHeight(0.82f),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                itemsIndexed(sessionStops, key = { _, item -> item.id }) { _, stop ->
+                itemsIndexed(sessionStops, key = { _, item -> item.order }) { _, stop ->
                     val selected = selectedStopId == stop.id
                     Card(
                         modifier = Modifier
