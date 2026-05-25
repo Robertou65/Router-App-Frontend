@@ -206,7 +206,7 @@ fun SaveExportScreen(
                                 ),
                             )
                             val stopsToInsert = stops.mapIndexed { index, stop ->
-                                stop.copy(routeId = routeId, order = index + 1)
+                                stop.copy(routeId = routeId, order = index + 1, id = 0L)
                             }
                             stopsToInsert.forEach { db.stopDao().insert(it) }
                         }
