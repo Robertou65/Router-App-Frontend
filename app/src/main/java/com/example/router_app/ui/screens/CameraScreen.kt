@@ -372,45 +372,28 @@ private fun ScanStateOverlay(
     scanState: CameraViewModel.ScanState,
     modifier: Modifier = Modifier,
 ) {
-    when (scanState) {
-        is CameraViewModel.ScanState.Idle -> Unit
-        is CameraViewModel.ScanState.Scanning,
-        is CameraViewModel.ScanState.Requesting -> {
-            Box(
-                modifier = modifier.background(Color.Black.copy(alpha = 0.5f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = "Reading address...",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color.White,
-                )
-            }
-        }
-        is CameraViewModel.ScanState.Success -> {
-            Box(
-                modifier = modifier.background(Color(0x6600C853)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = "Address added",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color.White,
-                )
-            }
-        }
-        is CameraViewModel.ScanState.Failure -> {
-            Box(
-                modifier = modifier.background(Color(0x66D50000)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = scanState.reason,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color.White,
-                )
-            }
-        }
+    val (label, color) = when (scanState) {
+        is CameraViewModel.ScanState.Idle -> return
+        is CameraViewModel.ScanState.Scanning ->
+            "Reading label…" to Color.Black.copy(alpha = 0.5f)
+        is CameraViewModel.ScanState.Extracting ->
+            "Parsing address…" to Color.Black.copy(alpha = 0.5f)
+        is CameraViewModel.ScanState.Geocoding ->
+            "Adding stop…" to Color.Black.copy(alpha = 0.5f)
+        is CameraViewModel.ScanState.Success ->
+            "Address added ✓" to Color(0x6600C853)
+        is CameraViewModel.ScanState.Failure ->
+            scanState.reason to Color(0x66D50000)
+    }
+    Box(
+        modifier = modifier.background(color),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.titleMedium,
+            color = Color.White,
+        )
     }
 }
 

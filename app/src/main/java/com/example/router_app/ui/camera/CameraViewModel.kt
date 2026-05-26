@@ -25,7 +25,8 @@ class CameraViewModel(
     sealed class ScanState {
         object Idle : ScanState()
         object Scanning : ScanState()
-        object Requesting : ScanState()
+        object Extracting : ScanState()
+        object Geocoding : ScanState()
         data class Success(val stop: Stop) : ScanState()
         data class Failure(val reason: String) : ScanState()
     }
@@ -101,7 +102,7 @@ class CameraViewModel(
         }
 
         _lastOcrText.value = text
-        _scanState.value = ScanState.Requesting
+        _scanState.value = ScanState.Extracting
 
         viewModelScope.launch {
             val extracted = aiAddressExtractor.extract(text)
@@ -118,6 +119,8 @@ class CameraViewModel(
                     return@launch
                 }
             }
+
+            _scanState.value = ScanState.Geocoding
 
             when (val result = geocodingRepository.geocodeAddress(address)) {
                 is GeocodingResult.Success -> {
@@ -157,7 +160,7 @@ class CameraViewModel(
         if (_scanState.value !is ScanState.Idle) return
         if (address.isBlank()) return
 
-        _scanState.value = ScanState.Requesting
+        _scanState.value = ScanState.Geocoding
 
         viewModelScope.launch {
             when (val result = geocodingRepository.geocodeAddress(address)) {
