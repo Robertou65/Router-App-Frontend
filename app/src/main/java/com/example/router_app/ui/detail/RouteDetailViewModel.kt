@@ -37,14 +37,14 @@ class RouteDetailViewModel(application: Application) : AndroidViewModel(applicat
 
     fun removeStop(stopId: Long) {
         viewModelScope.launch(Dispatchers.IO) {
-            _deletingStopIds.value = _deletingStopIds.value + stopId
+            _deletingStopIds.value += stopId
             db.stopDao().deleteById(stopId)
             // Reload stops after deletion
             val updatedStops = db.stopDao().getByRouteId(
                 _uiState.value.route?.id ?: return@launch
             )
             _uiState.value = _uiState.value.copy(stops = updatedStops)
-            _deletingStopIds.value = _deletingStopIds.value - stopId
+            _deletingStopIds.value -= stopId
         }
     }
 }

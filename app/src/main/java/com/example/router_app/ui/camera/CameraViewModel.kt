@@ -2,10 +2,11 @@ package com.example.router_app.ui.camera
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.router_app.data.ai.AiAddressExtractor
+import com.example.router_app.data.ai.AiExtractionResult
 import com.example.router_app.data.geocoding.GeocodingRepository
 import com.example.router_app.data.geocoding.GeocodingResult
 import com.example.router_app.data.local.Stop
-import com.example.router_app.data.parser.AddressParser
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,7 +14,7 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
 class CameraViewModel(
-    private val addressParser: AddressParser = AddressParser(),
+    private val aiAddressExtractor: AiAddressExtractor = AiAddressExtractor(),
     private val geocodingRepository: GeocodingRepository = GeocodingRepository(),
 ) : ViewModel() {
     data class SessionPanelState(
@@ -102,16 +103,30 @@ class CameraViewModel(
         _lastOcrText.value = text
         _scanState.value = ScanState.Requesting
 
-        val parsed = addressParser.parse(text)
         viewModelScope.launch {
-            when (val result = geocodingRepository.geocodeAddress(parsed.address)) {
+            val extracted = aiAddressExtractor.extract(text)
+            val address = when (extracted) {
+                is AiExtractionResult.Success -> extracted.address
+                is AiExtractionResult.Error -> {
+                    val reason = when (extracted.type) {
+                        AiExtractionResult.ErrorType.AddressNotFound -> "Address not found"
+                        AiExtractionResult.ErrorType.AuthError -> "Server auth error"
+                        AiExtractionResult.ErrorType.Timeout -> "Server timeout"
+                        AiExtractionResult.ErrorType.ConnectionError -> "Connection error"
+                    }
+                    failWith(reason)
+                    return@launch
+                }
+            }
+
+            when (val result = geocodingRepository.geocodeAddress(address)) {
                 is GeocodingResult.Success -> {
                     val stop = Stop(
                         id = -(_sessionStops.value.size + 1L),
                         routeId = 0L,
                         label = "Package #${_sessionStops.value.size + 1}",
                         rawOcrText = text,
-                        address = parsed.address,
+                        address = address,
                         lat = result.lat,
                         lng = result.lng,
                         order = _sessionStops.value.size + 1,

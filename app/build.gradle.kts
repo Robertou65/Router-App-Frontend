@@ -34,6 +34,18 @@ android {
             "GOOGLE_MAPS_API_KEY is missing from local.properties"
         }
         buildConfigField("String", "GOOGLE_MAPS_API_KEY", "\"$googleMapsApiKey\"")
+
+        val aiServerUrl = localProperties.getProperty("AI_SERVER_URL")
+        check(!aiServerUrl.isNullOrBlank()) {
+            "AI_SERVER_URL is missing from local.properties"
+        }
+        buildConfigField("String", "AI_SERVER_URL", "\"$aiServerUrl\"")
+
+        val aiApiKey = localProperties.getProperty("AI_API_KEY")
+        check(!aiApiKey.isNullOrBlank()) {
+            "AI_API_KEY is missing from local.properties"
+        }
+        buildConfigField("String", "AI_API_KEY", "\"$aiApiKey\"")
     }
 
     buildTypes {

@@ -44,10 +44,10 @@ class RouteHistoryViewModel(application: Application) : AndroidViewModel(applica
 
     fun deleteRoute(routeId: Long) {
         viewModelScope.launch(Dispatchers.IO) {
-            _deletingRouteIds.value = _deletingRouteIds.value + routeId
+            _deletingRouteIds.value += routeId
             routeDao.deleteById(routeId)
             stopDao.deleteByRouteId(routeId)
-            _deletingRouteIds.value = _deletingRouteIds.value - routeId
+            _deletingRouteIds.value -= routeId
         }
     }
 }
