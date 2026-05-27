@@ -58,6 +58,7 @@ fun SaveExportScreen(
     val context = LocalContext.current
     val stops by cameraViewModel.sessionStops.collectAsState()
     val existingRouteId by cameraViewModel.existingRouteId.collectAsState()
+    val routeConfig by cameraViewModel.routeConfig.collectAsState()
     val now = remember { Date() }
     val defaultRouteName = remember(now) {
         "Route - ${SimpleDateFormat("MMM dd - HH:mm", Locale.getDefault()).format(now)}"
@@ -67,9 +68,11 @@ fun SaveExportScreen(
         "route_${datePart}.csv"
     }
 
-    var routeName by rememberSaveable { mutableStateOf(defaultRouteName) }
+    var routeName by rememberSaveable(routeConfig.routeName) { mutableStateOf(routeConfig.routeName) }
     var csvFileName by rememberSaveable { mutableStateOf(defaultCsvName) }
-    var selectedFolderUri by rememberSaveable { mutableStateOf<Uri?>(null) }
+    var selectedFolderUri by rememberSaveable(routeConfig.folderUri?.toString()) {
+        mutableStateOf(routeConfig.folderUri)
+    }
     var isSaving by remember { mutableStateOf(false) }
     var isExporting by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }

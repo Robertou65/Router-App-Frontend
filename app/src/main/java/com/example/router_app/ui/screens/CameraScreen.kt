@@ -58,7 +58,6 @@ import androidx.compose.ui.graphics.Color
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.PermissionStatus
 import com.google.accompanist.permissions.rememberPermissionState
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.router_app.data.ocr.OcrTextAnalyzer
 import com.example.router_app.data.local.Stop
 import com.example.router_app.ui.camera.CameraViewModel
@@ -66,6 +65,7 @@ import com.example.router_app.ui.camera.CameraViewModel
 @Composable
 @OptIn(ExperimentalPermissionsApi::class)
 fun CameraScreen(
+    cameraViewModel: CameraViewModel,
     onFinish: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -82,7 +82,6 @@ fun CameraScreen(
 
     when (val status = cameraPermissionState.status) {
         is PermissionStatus.Granted -> {
-            val cameraViewModel: CameraViewModel = viewModel()
             CameraScreenContent(
                 onFinish = onFinish,
                 viewModel = cameraViewModel,
