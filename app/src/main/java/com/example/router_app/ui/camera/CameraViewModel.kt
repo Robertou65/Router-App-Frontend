@@ -211,7 +211,7 @@ class CameraViewModel(
         _scanState.value = ScanState.Extracting
 
         viewModelScope.launch {
-            val extracted = aiAddressExtractor.extract(text)
+            val extracted = aiAddressExtractor.extract(text, _routeConfig.value.city)
             val address = when (extracted) {
                 is AiExtractionResult.Success -> extracted.address
                 is AiExtractionResult.Error -> {

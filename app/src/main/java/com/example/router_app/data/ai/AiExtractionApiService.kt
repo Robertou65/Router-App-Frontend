@@ -4,7 +4,7 @@ import retrofit2.http.Body
 import retrofit2.http.Header
 import retrofit2.http.POST
 
-data class ExtractRequest(val ocr_text: String)
+data class ExtractRequest(val ocr_text: String, val city: String)
 data class ExtractResponse(val address: String, val success: Boolean)
 
 interface AiExtractionApiService {

@@ -22,11 +22,11 @@ class AiAddressExtractor(
         .build()
         .create(AiExtractionApiService::class.java),
 ) {
-    suspend fun extract(rawOcrText: String): AiExtractionResult {
+    suspend fun extract(rawOcrText: String, city: String): AiExtractionResult {
         return try {
             val response = api.extractAddress(
                 apiKey = BuildConfig.AI_API_KEY,
-                request = ExtractRequest(ocr_text = rawOcrText),
+                request = ExtractRequest(ocr_text = rawOcrText, city = city),
             )
             if (response.success && response.address.isNotBlank()) {
                 AiExtractionResult.Success(response.address)
