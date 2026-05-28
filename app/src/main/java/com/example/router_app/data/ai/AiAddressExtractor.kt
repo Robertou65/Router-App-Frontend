@@ -29,7 +29,7 @@ class AiAddressExtractor(
                 request = ExtractRequest(ocr_text = rawOcrText, city = city),
             )
             if (response.success && response.address.isNotBlank()) {
-                AiExtractionResult.Success(response.address)
+                AiExtractionResult.Success(response.address, response.lat, response.lng)
             } else {
                 AiExtractionResult.Error(AiExtractionResult.ErrorType.AddressNotFound)
             }

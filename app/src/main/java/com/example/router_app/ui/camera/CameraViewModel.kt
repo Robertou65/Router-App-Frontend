@@ -6,16 +6,16 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.router_app.data.ai.AiAddressExtractor
 import com.example.router_app.data.ai.AiExtractionResult
-import com.example.router_app.data.geocoding.GeocodingRepository
-import com.example.router_app.data.geocoding.GeocodingResult
 import com.example.router_app.data.local.Stop
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
-import java.io.BufferedReader
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -23,7 +23,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class CameraViewModel(
     private val aiAddressExtractor: AiAddressExtractor = AiAddressExtractor(),
-    private val geocodingRepository: GeocodingRepository = GeocodingRepository(),
 ) : ViewModel() {
     data class RouteConfig(
         val routeName: String = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()).format(Date()),
@@ -46,7 +45,6 @@ class CameraViewModel(
         object Idle : ScanState()
         object Scanning : ScanState()
         object Extracting : ScanState()
-        object Geocoding : ScanState()
         data class Success(val stop: Stop) : ScanState()
         data class Failure(val reason: String) : ScanState()
     }
@@ -114,52 +112,124 @@ class CameraViewModel(
             var imported = 0
             var failed = 0
 
-            dataLines.forEachIndexed { index, line ->
-                _importState.value = ImportState.Importing(index + 1, total)
+            data class CsvRow(
+                val index: Int,
+                val name: String,
+                val address: String,
+                val lat: Double?,
+                val lng: Double?,
+            )
+
+            data class CsvOutcome(
+                val index: Int,
+                val name: String,
+                val address: String,
+                val lat: Double?,
+                val lng: Double?,
+                val success: Boolean,
+            )
+
+            val rows = dataLines.mapIndexed { index, line ->
                 val cols = parseCsvLine(line)
-                val nameCol = cols.getOrNull(0)?.trim().orEmpty()
-                val addressCol = cols.getOrNull(1)?.trim().orEmpty()
-                val lat = cols.getOrNull(2)?.trim()?.toDoubleOrNull()
-                val lng = cols.getOrNull(3)?.trim()?.toDoubleOrNull()
-                if (addressCol.isBlank()) {
+                CsvRow(
+                    index = index,
+                    name = cols.getOrNull(0)?.trim().orEmpty(),
+                    address = cols.getOrNull(1)?.trim().orEmpty(),
+                    lat = cols.getOrNull(2)?.trim()?.toDoubleOrNull(),
+                    lng = cols.getOrNull(3)?.trim()?.toDoubleOrNull(),
+                )
+            }
+
+            val pendingRows = rows.filter { row ->
+                row.address.isNotBlank() && (row.lat == null || row.lng == null)
+            }
+
+            val asyncResults = withContext(Dispatchers.IO) {
+                coroutineScope {
+                    pendingRows.map { row ->
+                        async {
+                            val extracted = aiAddressExtractor.extract(row.address, _routeConfig.value.city)
+                            row to extracted
+                        }
+                    }.awaitAll()
+                }
+            }
+
+            val outcomes = mutableListOf<CsvOutcome>()
+            rows.forEach { row ->
+                if (row.address.isBlank()) {
+                    outcomes.add(
+                        CsvOutcome(
+                            index = row.index,
+                            name = row.name,
+                            address = row.address,
+                            lat = null,
+                            lng = null,
+                            success = false,
+                        )
+                    )
+                } else if (row.lat != null && row.lng != null) {
+                    outcomes.add(
+                        CsvOutcome(
+                            index = row.index,
+                            name = row.name,
+                            address = row.address,
+                            lat = row.lat,
+                            lng = row.lng,
+                            success = true,
+                        )
+                    )
+                }
+            }
+
+            asyncResults.forEach { (row, extracted) ->
+                when (extracted) {
+                    is AiExtractionResult.Success -> outcomes.add(
+                        CsvOutcome(
+                            index = row.index,
+                            name = row.name,
+                            address = extracted.address,
+                            lat = extracted.lat,
+                            lng = extracted.lng,
+                            success = true,
+                        )
+                    )
+                    is AiExtractionResult.Error -> outcomes.add(
+                        CsvOutcome(
+                            index = row.index,
+                            name = row.name,
+                            address = row.address,
+                            lat = null,
+                            lng = null,
+                            success = false,
+                        )
+                    )
+                }
+            }
+
+            val updatedStops = _sessionStops.value.toMutableList()
+            outcomes.sortedBy { it.index }.forEachIndexed { index, outcome ->
+                _importState.value = ImportState.Importing(index + 1, total)
+                if (!outcome.success) {
                     failed++
                     return@forEachIndexed
                 }
-                val label = nameCol.ifBlank { "Package #${_sessionStops.value.size + 1}" }
-                if (lat != null && lng != null) {
-                    val stop = Stop(
-                        id = -(_sessionStops.value.size + 1L),
-                        routeId = 0L,
-                        label = label,
-                        rawOcrText = "",
-                        address = addressCol,
-                        lat = lat,
-                        lng = lng,
-                        order = _sessionStops.value.size + 1,
-                    )
-                    _sessionStops.value = _sessionStops.value + stop
-                    imported++
-                } else {
-                    val geoAddress = buildGeocodingAddress(addressCol, _routeConfig.value.city)
-                    when (val result = geocodingRepository.geocodeAddress(geoAddress)) {
-                        is GeocodingResult.Success -> {
-                            val stop = Stop(
-                                id = -(_sessionStops.value.size + 1L),
-                                routeId = 0L,
-                                label = label,
-                                rawOcrText = "",
-                                address = addressCol,
-                                lat = result.lat,
-                                lng = result.lng,
-                                order = _sessionStops.value.size + 1,
-                            )
-                            _sessionStops.value = _sessionStops.value + stop
-                            imported++
-                        }
-                        is GeocodingResult.Error -> failed++
-                    }
-                }
+                val label = outcome.name.ifBlank { "Package #${updatedStops.size + 1}" }
+                val stop = Stop(
+                    id = -(updatedStops.size + 1L),
+                    routeId = 0L,
+                    label = label,
+                    rawOcrText = "",
+                    address = outcome.address,
+                    lat = outcome.lat ?: 0.0,
+                    lng = outcome.lng ?: 0.0,
+                    order = updatedStops.size + 1,
+                )
+                updatedStops.add(stop)
+                imported++
             }
+
+            _sessionStops.value = updatedStops
             _importState.value = ImportState.Done(imported, failed)
         }
     }
@@ -212,8 +282,8 @@ class CameraViewModel(
 
         viewModelScope.launch {
             val extracted = aiAddressExtractor.extract(text, _routeConfig.value.city)
-            val address = when (extracted) {
-                is AiExtractionResult.Success -> extracted.address
+            val success = when (extracted) {
+                is AiExtractionResult.Success -> extracted
                 is AiExtractionResult.Error -> {
                     val reason = when (extracted.type) {
                         AiExtractionResult.ErrorType.AddressNotFound -> "Address not found"
@@ -226,33 +296,18 @@ class CameraViewModel(
                 }
             }
 
-            _scanState.value = ScanState.Geocoding
-
-            val geoAddress = buildGeocodingAddress(address, _routeConfig.value.city)
-            when (val result = geocodingRepository.geocodeAddress(geoAddress)) {
-                is GeocodingResult.Success -> {
-                    val stop = Stop(
-                        id = -(_sessionStops.value.size + 1L),
-                        routeId = 0L,
-                        label = "Package #${_sessionStops.value.size + 1}",
-                        rawOcrText = text,
-                        address = address,
-                        lat = result.lat,
-                        lng = result.lng,
-                        order = _sessionStops.value.size + 1,
-                    )
-                    _sessionStops.value = _sessionStops.value + stop
-                    succeedWith(stop)
-                }
-                is GeocodingResult.Error -> {
-                    val reason = when (result.type) {
-                        GeocodingResult.ErrorType.AddressNotFound -> "Address not found"
-                        GeocodingResult.ErrorType.ApiKeyError -> "API key error"
-                        GeocodingResult.ErrorType.ConnectionError -> "Connection error"
-                    }
-                    failWith(reason)
-                }
-            }
+            val stop = Stop(
+                id = -(_sessionStops.value.size + 1L),
+                routeId = 0L,
+                label = "Package #${_sessionStops.value.size + 1}",
+                rawOcrText = text,
+                address = success.address,
+                lat = success.lat,
+                lng = success.lng,
+                order = _sessionStops.value.size + 1,
+            )
+            _sessionStops.value = _sessionStops.value + stop
+            succeedWith(stop)
         }
     }
 
@@ -267,30 +322,31 @@ class CameraViewModel(
         if (_scanState.value !is ScanState.Idle) return
         if (address.isBlank()) return
 
-        _scanState.value = ScanState.Geocoding
+        _scanState.value = ScanState.Extracting
 
         viewModelScope.launch {
-            val geoAddress = buildGeocodingAddress(address, _routeConfig.value.city)
-            when (val result = geocodingRepository.geocodeAddress(geoAddress)) {
-                is GeocodingResult.Success -> {
+            val extracted = aiAddressExtractor.extract(address, _routeConfig.value.city)
+            when (extracted) {
+                is AiExtractionResult.Success -> {
                     val stop = Stop(
                         id = -(_sessionStops.value.size + 1L),
                         routeId = 0L,
                         label = "Package #${_sessionStops.value.size + 1}",
                         rawOcrText = address,
-                        address = address,
-                        lat = result.lat,
-                        lng = result.lng,
+                        address = extracted.address,
+                        lat = extracted.lat,
+                        lng = extracted.lng,
                         order = _sessionStops.value.size + 1,
                     )
                     _sessionStops.value = _sessionStops.value + stop
                     succeedWith(stop)
                 }
-                is GeocodingResult.Error -> {
-                    val reason = when (result.type) {
-                        GeocodingResult.ErrorType.AddressNotFound -> "Address not found"
-                        GeocodingResult.ErrorType.ApiKeyError -> "API key error"
-                        GeocodingResult.ErrorType.ConnectionError -> "Connection error"
+                is AiExtractionResult.Error -> {
+                    val reason = when (extracted.type) {
+                        AiExtractionResult.ErrorType.AddressNotFound -> "Address not found"
+                        AiExtractionResult.ErrorType.AuthError -> "Server auth error"
+                        AiExtractionResult.ErrorType.Timeout -> "Server timeout"
+                        AiExtractionResult.ErrorType.ConnectionError -> "Connection error"
                     }
                     failWith(reason)
                 }
@@ -311,15 +367,6 @@ class CameraViewModel(
         viewModelScope.launch {
             delay(1500)
             _scanState.value = ScanState.Idle
-        }
-    }
-
-    private fun buildGeocodingAddress(address: String, city: String): String {
-        val lower = address.lowercase()
-        return if (lower.contains(city.lowercase()) || lower.contains("colombia")) {
-            address
-        } else {
-            "$address, $city, Colombia"
         }
     }
 

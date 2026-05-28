@@ -377,8 +377,6 @@ private fun ScanStateOverlay(
             "Reading label…" to Color.Black.copy(alpha = 0.5f)
         is CameraViewModel.ScanState.Extracting ->
             "Parsing address…" to Color.Black.copy(alpha = 0.5f)
-        is CameraViewModel.ScanState.Geocoding ->
-            "Adding stop…" to Color.Black.copy(alpha = 0.5f)
         is CameraViewModel.ScanState.Success ->
             "Address added ✓" to Color(0x6600C853)
         is CameraViewModel.ScanState.Failure ->
