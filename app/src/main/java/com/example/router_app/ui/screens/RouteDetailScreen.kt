@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -38,12 +39,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
-import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.router_app.data.export.CsvExporter
 import com.example.router_app.data.local.Stop
 import com.example.router_app.ui.detail.RouteDetailViewModel
-import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -61,9 +60,37 @@ fun RouteDetailScreen(
     val context = LocalContext.current
     var stopPendingDelete by remember { mutableStateOf<Stop?>(null) }
     var selectedFolderUri by rememberSaveable { mutableStateOf<Uri?>(null) }
-    var showSaveDialog by remember { mutableStateOf(false) }
+    var showLocationDialog by remember { mutableStateOf(false) }
+    var isSaving by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+
+    // The DB already reflects every edit (deletes persist immediately, new stops are
+    // added through the camera flow), so "save" here writes the up-to-date route to CSV.
+    val writeCsv: (Uri) -> Unit = { uri ->
+        scope.launch {
+            isSaving = true
+            val result = runCatching {
+                val csv = CsvExporter.buildCsv(uiState.stops)
+                withContext(Dispatchers.IO) {
+                    val folder = DocumentFile.fromTreeUri(context, uri)
+                        ?: error("Unable to access selected folder")
+                    val fileName = "route_${routeId}.csv"
+                    folder.findFile(fileName)?.delete()
+                    val file = folder.createFile("text/csv", fileName)
+                        ?: error("Unable to create route CSV")
+                    context.contentResolver.openOutputStream(file.uri, "w")?.use { output ->
+                        output.write(csv.toByteArray(Charsets.UTF_8))
+                    } ?: error("Unable to open output stream")
+                }
+            }
+            isSaving = false
+            snackbarHostState.showSnackbar(
+                if (result.isSuccess) "Route saved" else "Couldn't save the CSV file",
+            )
+        }
+    }
+
     val folderPickerForSave = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree(),
     ) { uri ->
@@ -71,22 +98,7 @@ fun RouteDetailScreen(
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             context.contentResolver.takePersistableUriPermission(uri, flags)
             selectedFolderUri = uri
-            scope.launch {
-                val csv = CsvExporter.buildCsv(uiState.stops)
-                withContext(Dispatchers.IO) {
-                    val folder = DocumentFile.fromTreeUri(context, uri)
-                        ?: error("Unable to access selected folder")
-                    val fileName = "route_${routeId}.csv"
-                    val existing = folder.findFile(fileName)
-                    existing?.delete()
-                    val file = folder.createFile("text/csv", fileName)
-                        ?: error("Unable to create route CSV")
-                    context.contentResolver.openOutputStream(file.uri)?.use { output ->
-                        output.write(csv.toByteArray(Charsets.UTF_8))
-                    } ?: error("Unable to open output stream")
-                }
-                snackbarHostState.showSnackbar("Saved to folder")
-            }
+            writeCsv(uri)
         }
     }
 
@@ -169,11 +181,18 @@ fun RouteDetailScreen(
          SnackbarHost(hostState = snackbarHostState)
 
          Button(
-             onClick = { showSaveDialog = true },
-             enabled = uiState.stops.isNotEmpty(),
+             onClick = {
+                 val uri = selectedFolderUri
+                 if (uri == null) showLocationDialog = true else writeCsv(uri)
+             },
+             enabled = uiState.stops.isNotEmpty() && !isSaving,
              modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
          ) {
-             Text(text = "Save")
+             if (isSaving) {
+                 CircularProgressIndicator(modifier = Modifier.height(20.dp))
+             } else {
+                 Text(text = "Save Route")
+             }
          }
 
         Button(onClick = onBack, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
@@ -205,73 +224,22 @@ fun RouteDetailScreen(
         )
     }
 
-    if (showSaveDialog) {
+    if (showLocationDialog) {
         AlertDialog(
-            onDismissRequest = { showSaveDialog = false },
-            content = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(text = "Save route")
-                    Button(
-                        onClick = {
-                            showSaveDialog = false
-                            scope.launch {
-                                val csv = CsvExporter.buildCsv(uiState.stops)
-                                val intent = withContext(Dispatchers.IO) {
-                                    val fileName = "route_${routeId}.csv"
-                                    val cacheFile = File(context.cacheDir, fileName)
-                                    cacheFile.writeText(csv, Charsets.UTF_8)
-                                    val shareUri = FileProvider.getUriForFile(
-                                        context,
-                                        "${context.packageName}.fileprovider",
-                                        cacheFile,
-                                    )
-                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                        type = "text/csv"
-                                        putExtra(Intent.EXTRA_STREAM, shareUri)
-                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                    }
-                                    val cutoff = System.currentTimeMillis() - 3_600_000L
-                                    context.cacheDir.listFiles()
-                                        ?.filter { it.extension == "csv" && it.lastModified() < cutoff }
-                                        ?.forEach { it.delete() }
-                                    shareIntent
-                                }
-                                context.startActivity(Intent.createChooser(intent, "Share route"))
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(text = "Share Route")
-                    }
-                    Button(
-                        onClick = {
-                            showSaveDialog = false
-                            scope.launch {
-                                val csv = CsvExporter.buildCsv(uiState.stops)
-                                val uri = selectedFolderUri
-                                if (uri != null) {
-                                    withContext(Dispatchers.IO) {
-                                        val folder = DocumentFile.fromTreeUri(context, uri)
-                                            ?: error("Unable to access selected folder")
-                                        val fileName = "route_${routeId}.csv"
-                                        val existing = folder.findFile(fileName)
-                                        existing?.delete()
-                                        val file = folder.createFile("text/csv", fileName)
-                                            ?: error("Unable to create route CSV")
-                                        context.contentResolver.openOutputStream(file.uri)?.use { output ->
-                                            output.write(csv.toByteArray(Charsets.UTF_8))
-                                        } ?: error("Unable to open output stream")
-                                    }
-                                    snackbarHostState.showSnackbar("Saved to folder")
-                                } else {
-                                    folderPickerForSave.launch(null)
-                                }
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(text = "Save Route")
-                    }
+            onDismissRequest = { showLocationDialog = false },
+            title = { Text(text = "Choose a location") },
+            text = { Text(text = "Select a folder where the CSV file will be saved.") },
+            confirmButton = {
+                Button(onClick = {
+                    showLocationDialog = false
+                    folderPickerForSave.launch(null)
+                }) {
+                    Text(text = "Choose folder")
+                }
+            },
+            dismissButton = {
+                Button(onClick = { showLocationDialog = false }) {
+                    Text(text = "Cancel")
                 }
             },
         )

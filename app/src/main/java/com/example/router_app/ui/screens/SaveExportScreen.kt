@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -27,24 +28,21 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.core.content.FileProvider
 import androidx.documentfile.provider.DocumentFile
+import com.example.router_app.data.export.CsvExporter
 import com.example.router_app.data.local.AppDatabase
 import com.example.router_app.data.local.Route
-import com.example.router_app.data.local.Stop
-import com.example.router_app.data.export.CsvExporter
 import com.example.router_app.ui.camera.CameraViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import androidx.compose.runtime.rememberCoroutineScope
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -59,6 +57,8 @@ fun SaveExportScreen(
     val stops by cameraViewModel.sessionStops.collectAsState()
     val existingRouteId by cameraViewModel.existingRouteId.collectAsState()
     val routeConfig by cameraViewModel.routeConfig.collectAsState()
+    val isEditing = existingRouteId != null
+
     val now = remember { Date() }
     val defaultRouteName = remember(now) {
         "Route - ${SimpleDateFormat("MMM dd - HH:mm", Locale.getDefault()).format(now)}"
@@ -74,9 +74,59 @@ fun SaveExportScreen(
         mutableStateOf(routeConfig.folderUri)
     }
     var isSaving by remember { mutableStateOf(false) }
-    var isExporting by remember { mutableStateOf(false) }
+    var showLocationDialog by remember { mutableStateOf(false) }
+    // True when the picker was opened from the save action, so we save as soon as a folder is granted.
+    var saveAfterPick by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+
+    // Saves the route to Room AND writes the CSV to the chosen folder, then leaves the screen.
+    val saveRoute: (Uri) -> Unit = { folderUri ->
+        scope.launch {
+            isSaving = true
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    val db = AppDatabase.getInstance(context)
+                    val routeId = existingRouteId?.also { id ->
+                        val startOrder = db.stopDao().getByRouteId(id).size + 1
+                        stops.mapIndexed { index, stop ->
+                            stop.copy(routeId = id, order = startOrder + index, id = 0L)
+                        }.forEach { db.stopDao().insert(it) }
+                    } ?: run {
+                        val newId = db.routeDao().insert(
+                            Route(
+                                name = routeName.ifBlank { defaultRouteName },
+                                createdAt = System.currentTimeMillis(),
+                            ),
+                        )
+                        stops.mapIndexed { index, stop ->
+                            stop.copy(routeId = newId, order = index + 1, id = 0L)
+                        }.forEach { db.stopDao().insert(it) }
+                        newId
+                    }
+
+                    // Export the full, persisted route (existing + newly added stops).
+                    val allStops = db.stopDao().getByRouteId(routeId)
+                    val csv = CsvExporter.buildCsv(allStops)
+                    val fileName = if (isEditing) "route_${routeId}.csv" else csvFileName.ifBlank { defaultCsvName }
+                    val folder = DocumentFile.fromTreeUri(context, folderUri)
+                        ?: error("Unable to access selected folder")
+                    folder.findFile(fileName)?.delete()
+                    val file = folder.createFile("text/csv", fileName)
+                        ?: error("Unable to create CSV file")
+                    context.contentResolver.openOutputStream(file.uri, "w")?.use { out ->
+                        out.write(csv.toByteArray(Charsets.UTF_8))
+                    } ?: error("Unable to write CSV file")
+                }
+            }
+            isSaving = false
+            if (result.isSuccess) {
+                onSaveComplete()
+            } else {
+                snackbarHostState.showSnackbar("Couldn't save the route. Check the folder and try again.")
+            }
+        }
+    }
 
     val folderPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree(),
@@ -85,215 +135,117 @@ fun SaveExportScreen(
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             context.contentResolver.takePersistableUriPermission(uri, flags)
             selectedFolderUri = uri
+            if (saveAfterPick) {
+                saveAfterPick = false
+                saveRoute(uri)
+            }
         }
     }
 
-    if (existingRouteId != null) {
-        // Edit mode
-        Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(text = "Add Stops to Route", style = MaterialTheme.typography.titleLarge)
-            
-            Text(text = "New stops to add:", style = MaterialTheme.typography.titleMedium)
-            if (stops.isEmpty()) {
-                Text(text = "No scanned stops", style = MaterialTheme.typography.bodyMedium)
-            } else {
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    itemsIndexed(stops) { index, stop ->
-                        Text(text = "${index + 1}. ${stop.address}")
-                    }
-                }
-            }
-
-            SnackbarHost(hostState = snackbarHostState)
-
-            Button(
-                onClick = {
-                    val db = AppDatabase.getInstance(context)
-                    scope.launch {
-                        isSaving = true
-                        withContext(Dispatchers.IO) {
-                            val existingStops = db.stopDao().getByRouteId(existingRouteId!!)
-                            val startOrder = existingStops.size + 1
-                            val stopsToInsert = stops.mapIndexed { index, stop ->
-                                stop.copy(
-                                    routeId = existingRouteId!!,
-                                    order = startOrder + index,
-                                    id = 0L
-                                )
-                            }
-                            stopsToInsert.forEach { db.stopDao().insert(it) }
-                        }
-                        isSaving = false
-                        onSaveComplete()
-                    }
-                },
-                enabled = stops.isNotEmpty() && !isSaving,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                if (isSaving) {
-                    CircularProgressIndicator(modifier = Modifier.height(20.dp))
-                } else {
-                    Text(text = "Save to Route")
-                }
-            }
-
-            Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-                Text(text = "Back")
-            }
+    // Single entry point for the save button: prompt for a folder when none is set.
+    val onSaveClicked: () -> Unit = {
+        val folderUri = selectedFolderUri
+        if (folderUri == null) {
+            showLocationDialog = true
+        } else {
+            saveRoute(folderUri)
         }
-    } else {
-        // Create mode
-        Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(text = "Save & Export", style = MaterialTheme.typography.titleLarge)
+    }
 
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = if (isEditing) "Add Stops to Route" else "Save Route",
+            style = MaterialTheme.typography.titleLarge,
+        )
+
+        if (!isEditing) {
             OutlinedTextField(
                 value = routeName,
                 onValueChange = { routeName = it },
                 label = { Text(text = "Route name") },
                 modifier = Modifier.fillMaxWidth(),
             )
-
             OutlinedTextField(
                 value = csvFileName,
                 onValueChange = { csvFileName = it },
                 label = { Text(text = "CSV filename") },
                 modifier = Modifier.fillMaxWidth(),
             )
+        }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Button(onClick = { folderPicker.launch(null) }) {
-                    Text(text = "Pick folder")
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    text = selectedFolderUri?.toString() ?: "No folder selected",
-                    style = MaterialTheme.typography.bodySmall,
-                )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Button(onClick = {
+                saveAfterPick = false
+                folderPicker.launch(null)
+            }) {
+                Text(text = "Pick folder")
             }
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = selectedFolderUri?.lastPathSegment ?: "No folder selected",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
 
-            Text(text = "Stops", style = MaterialTheme.typography.titleMedium)
-            if (stops.isEmpty()) {
-                Text(text = "No scanned stops", style = MaterialTheme.typography.bodyMedium)
-            } else {
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    itemsIndexed(stops) { index, stop ->
-                        Text(text = "${index + 1}. ${stop.address}")
-                    }
-                }
-            }
-
-            SnackbarHost(hostState = snackbarHostState)
-
-            Button(
-                onClick = {
-                    val db = AppDatabase.getInstance(context)
-                    scope.launch {
-                        isSaving = true
-                        withContext(Dispatchers.IO) {
-                            val routeId = db.routeDao().insert(
-                                Route(
-                                    name = routeName.ifBlank { defaultRouteName },
-                                    createdAt = System.currentTimeMillis(),
-                                ),
-                            )
-                            val stopsToInsert = stops.mapIndexed { index, stop ->
-                                stop.copy(routeId = routeId, order = index + 1, id = 0L)
-                            }
-                            stopsToInsert.forEach { db.stopDao().insert(it) }
-                        }
-                        isSaving = false
-                        onSaveComplete()
-                    }
-                },
-                enabled = stops.isNotEmpty() && !isSaving && !isExporting,
-                modifier = Modifier.fillMaxWidth(),
+        Text(
+            text = if (isEditing) "New stops to add" else "Stops",
+            style = MaterialTheme.typography.titleMedium,
+        )
+        if (stops.isEmpty()) {
+            Text(text = "No scanned stops", style = MaterialTheme.typography.bodyMedium)
+        } else {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (isSaving) {
-                    CircularProgressIndicator(modifier = Modifier.height(20.dp))
-                } else {
-                    Text(text = "Save Route")
+                itemsIndexed(stops) { index, stop ->
+                    Text(text = "${index + 1}. ${stop.address}")
                 }
-            }
-
-            Button(
-                onClick = {
-                    val folderUri = selectedFolderUri
-                    if (folderUri == null) {
-                        scope.launch { snackbarHostState.showSnackbar("Please select a folder first.") }
-                        return@Button
-                    }
-                    if (stops.isEmpty()) {
-                        scope.launch { snackbarHostState.showSnackbar("No stops to export.") }
-                        return@Button
-                    }
-                    scope.launch {
-                        isExporting = true
-                        val csv = CsvExporter.buildCsv(stops)
-                        val finalFileName = csvFileName.ifBlank { defaultCsvName }
-                        val created = withContext(Dispatchers.IO) {
-                            val folder = DocumentFile.fromTreeUri(context, folderUri)
-                            val existing = folder?.findFile(finalFileName)
-                            existing?.delete()
-                            folder?.createFile("text/csv", finalFileName)
-                        }
-                        if (created == null) {
-                            isExporting = false
-                            snackbarHostState.showSnackbar("Unable to create file in selected folder.")
-                            return@launch
-                        }
-                        withContext(Dispatchers.IO) {
-                            context.contentResolver.openOutputStream(created.uri, "w")?.use { out ->
-                                out.write(csv.toByteArray(Charsets.UTF_8))
-                            }
-                            val cacheFile = File(context.cacheDir, finalFileName)
-                            cacheFile.writeText(csv, Charsets.UTF_8)
-                        }
-                        val cacheFile = File(context.cacheDir, finalFileName)
-                        val shareUri = FileProvider.getUriForFile(
-                            context,
-                            "${context.packageName}.fileprovider",
-                            cacheFile,
-                        )
-                        val intent = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/csv"
-                            putExtra(Intent.EXTRA_STREAM, shareUri)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        }
-                        context.startActivity(Intent.createChooser(intent, "Export to Routin"))
-                        withContext(Dispatchers.IO) {
-                            context.cacheDir.listFiles()
-                                ?.filter { it.extension == "csv" && it.lastModified() < System.currentTimeMillis() - 3_600_000L }
-                                ?.forEach { it.delete() }
-                        }
-                        isExporting = false
-                    }
-                },
-                enabled = stops.isNotEmpty() && !isSaving && !isExporting,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                if (isExporting) {
-                    CircularProgressIndicator(modifier = Modifier.height(20.dp))
-                } else {
-                    Text(text = "Export to Routin")
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-                Text(text = "Back")
             }
         }
+
+        SnackbarHost(hostState = snackbarHostState)
+
+        Button(
+            onClick = onSaveClicked,
+            enabled = stops.isNotEmpty() && !isSaving,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            if (isSaving) {
+                CircularProgressIndicator(modifier = Modifier.height(20.dp))
+            } else {
+                Text(text = "Save Route")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+        Button(onClick = onBack, enabled = !isSaving, modifier = Modifier.fillMaxWidth()) {
+            Text(text = "Back")
+        }
+    }
+
+    if (showLocationDialog) {
+        AlertDialog(
+            onDismissRequest = { showLocationDialog = false },
+            title = { Text(text = "Choose a location") },
+            text = { Text(text = "Select a folder where the CSV file will be saved.") },
+            confirmButton = {
+                Button(onClick = {
+                    showLocationDialog = false
+                    saveAfterPick = true
+                    folderPicker.launch(null)
+                }) {
+                    Text(text = "Choose folder")
+                }
+            },
+            dismissButton = {
+                Button(onClick = { showLocationDialog = false }) {
+                    Text(text = "Cancel")
+                }
+            },
+        )
     }
 }
