@@ -9,6 +9,7 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -48,6 +49,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -55,10 +58,12 @@ import androidx.core.content.ContextCompat
 import androidx.activity.compose.BackHandler
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.PermissionStatus
 import com.google.accompanist.permissions.rememberPermissionState
 import com.example.router_app.data.ocr.OcrTextAnalyzer
+import com.example.router_app.data.ocr.ScanRegion
 import com.example.router_app.data.local.Stop
 import com.example.router_app.ui.camera.CameraViewModel
 
@@ -143,6 +148,10 @@ private fun CameraScreenContent(
             modifier = Modifier.fillMaxSize(),
             viewModel = viewModel,
         )
+
+        if (!sessionPanelState.isOpen) {
+            ScanViewfinder(modifier = Modifier.fillMaxSize())
+        }
 
         if (sessionPanelState.isOpen) {
             SessionAddressPanel(
@@ -363,6 +372,35 @@ private fun SessionAddressPanel(
                 Text(text = "Remove Selected")
             }
         }
+    }
+}
+
+/**
+ * Dims everything outside the scan rectangle and draws its border, so the user
+ * frames the destination address inside the box — only that region is sent to OCR.
+ */
+@Composable
+private fun ScanViewfinder(modifier: Modifier = Modifier) {
+    val dim = Color.Black.copy(alpha = 0.5f)
+    Canvas(modifier = modifier) {
+        val left = size.width * ScanRegion.LEFT
+        val top = size.height * ScanRegion.TOP
+        val right = size.width * ScanRegion.RIGHT
+        val bottom = size.height * ScanRegion.BOTTOM
+
+        // Shade the four bands around the region of interest.
+        drawRect(dim, topLeft = Offset(0f, 0f), size = Size(size.width, top))
+        drawRect(dim, topLeft = Offset(0f, bottom), size = Size(size.width, size.height - bottom))
+        drawRect(dim, topLeft = Offset(0f, top), size = Size(left, bottom - top))
+        drawRect(dim, topLeft = Offset(right, top), size = Size(size.width - right, bottom - top))
+
+        // Outline the clear region.
+        drawRect(
+            color = Color.White,
+            topLeft = Offset(left, top),
+            size = Size(right - left, bottom - top),
+            style = Stroke(width = 3.dp.toPx()),
+        )
     }
 }
 

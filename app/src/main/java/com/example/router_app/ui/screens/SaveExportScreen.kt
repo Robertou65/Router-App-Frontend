@@ -97,6 +97,7 @@ fun SaveExportScreen(
                             Route(
                                 name = routeName.ifBlank { defaultRouteName },
                                 createdAt = System.currentTimeMillis(),
+                                city = routeConfig.city,
                             ),
                         )
                         stops.mapIndexed { index, stop ->

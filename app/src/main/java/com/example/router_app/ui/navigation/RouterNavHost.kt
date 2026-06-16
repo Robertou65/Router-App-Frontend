@@ -8,8 +8,12 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.router_app.data.local.AppDatabase
 import com.example.router_app.ui.screens.CameraScreen
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.example.router_app.ui.screens.RouteConfigScreen
 import com.example.router_app.ui.screens.RouteDetailScreen
 import com.example.router_app.ui.screens.RouteHistoryScreen
@@ -57,8 +61,19 @@ fun RouterNavHost() {
         ) { backStackEntry ->
             val routeId = backStackEntry.arguments?.getLong("routeId") ?: 0L
             val cameraViewModel: CameraViewModel = viewModel(backStackEntry)
+            val context = LocalContext.current
             LaunchedEffect(routeId) {
                 cameraViewModel.setExistingRoute(routeId)
+                // Restore the route's city so manually-typed stops format against the
+                // right city instead of the default.
+                val city = withContext(Dispatchers.IO) {
+                    AppDatabase.getInstance(context).routeDao().getById(routeId)?.city
+                }
+                if (city != null) {
+                    cameraViewModel.updateRouteConfig(
+                        cameraViewModel.routeConfig.value.copy(city = city),
+                    )
+                }
             }
             CameraScreen(
                 cameraViewModel = cameraViewModel,
