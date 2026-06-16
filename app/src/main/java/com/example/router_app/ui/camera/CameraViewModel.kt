@@ -4,8 +4,9 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.router_app.data.ai.AiAddressExtractor
-import com.example.router_app.data.ai.AiExtractionResult
+import com.example.router_app.data.format.ColombianAddressFormatter
+import com.example.router_app.data.geocoding.GeocodingRepository
+import com.example.router_app.data.geocoding.GeocodingResult
 import com.example.router_app.data.local.Stop
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -22,7 +23,7 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 class CameraViewModel(
-    private val aiAddressExtractor: AiAddressExtractor = AiAddressExtractor(),
+    private val geocodingRepository: GeocodingRepository = GeocodingRepository(),
 ) : ViewModel() {
     data class RouteConfig(
         val routeName: String = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()).format(Date()),
@@ -147,10 +148,7 @@ class CameraViewModel(
             val asyncResults = withContext(Dispatchers.IO) {
                 coroutineScope {
                     pendingRows.map { row ->
-                        async {
-                            val extracted = aiAddressExtractor.extract(row.address, _routeConfig.value.city)
-                            row to extracted
-                        }
+                        async { row to resolveAddress(row.address) }
                     }.awaitAll()
                 }
             }
@@ -182,19 +180,19 @@ class CameraViewModel(
                 }
             }
 
-            asyncResults.forEach { (row, extracted) ->
-                when (extracted) {
-                    is AiExtractionResult.Success -> outcomes.add(
+            asyncResults.forEach { (row, resolved) ->
+                when (resolved) {
+                    is Resolved.Ok -> outcomes.add(
                         CsvOutcome(
                             index = row.index,
-                            name = row.name,
-                            address = extracted.address,
-                            lat = extracted.lat,
-                            lng = extracted.lng,
+                            name = row.name.ifBlank { resolved.name.orEmpty() },
+                            address = resolved.address,
+                            lat = resolved.lat,
+                            lng = resolved.lng,
                             success = true,
                         )
                     )
-                    is AiExtractionResult.Error -> outcomes.add(
+                    is Resolved.Fail -> outcomes.add(
                         CsvOutcome(
                             index = row.index,
                             name = row.name,
@@ -254,12 +252,7 @@ class CameraViewModel(
     fun removeSelectedStop() {
         val selectedId = _sessionPanelState.value.selectedStopId ?: return
         val remaining = _sessionStops.value.filterNot { it.id == selectedId }
-            .mapIndexed { index, stop ->
-                stop.copy(
-                    label = "Package #${index + 1}",
-                    order = index + 1,
-                )
-            }
+            .mapIndexed { index, stop -> stop.copy(order = index + 1) }
         _sessionStops.value = remaining
         _sessionPanelState.value = _sessionPanelState.value.copy(selectedStopId = null)
     }
@@ -281,33 +274,14 @@ class CameraViewModel(
         _scanState.value = ScanState.Extracting
 
         viewModelScope.launch {
-            val extracted = aiAddressExtractor.extract(text, _routeConfig.value.city)
-            val success = when (extracted) {
-                is AiExtractionResult.Success -> extracted
-                is AiExtractionResult.Error -> {
-                    val reason = when (extracted.type) {
-                        AiExtractionResult.ErrorType.AddressNotFound -> "Address not found"
-                        AiExtractionResult.ErrorType.AuthError -> "Server auth error"
-                        AiExtractionResult.ErrorType.Timeout -> "Server timeout"
-                        AiExtractionResult.ErrorType.ConnectionError -> "Connection error"
-                    }
-                    failWith(reason)
-                    return@launch
+            when (val resolved = resolveAddress(text)) {
+                is Resolved.Fail -> failWith(resolved.reason)
+                is Resolved.Ok -> {
+                    val stop = newSessionStop(resolved, rawOcrText = text)
+                    _sessionStops.value = _sessionStops.value + stop
+                    succeedWith(stop)
                 }
             }
-
-            val stop = Stop(
-                id = -(_sessionStops.value.size + 1L),
-                routeId = 0L,
-                label = "Package #${_sessionStops.value.size + 1}",
-                rawOcrText = text,
-                address = success.address,
-                lat = success.lat,
-                lng = success.lng,
-                order = _sessionStops.value.size + 1,
-            )
-            _sessionStops.value = _sessionStops.value + stop
-            succeedWith(stop)
         }
     }
 
@@ -325,33 +299,63 @@ class CameraViewModel(
         _scanState.value = ScanState.Extracting
 
         viewModelScope.launch {
-            val extracted = aiAddressExtractor.extract(address, _routeConfig.value.city)
-            when (extracted) {
-                is AiExtractionResult.Success -> {
-                    val stop = Stop(
-                        id = -(_sessionStops.value.size + 1L),
-                        routeId = 0L,
-                        label = "Package #${_sessionStops.value.size + 1}",
-                        rawOcrText = address,
-                        address = extracted.address,
-                        lat = extracted.lat,
-                        lng = extracted.lng,
-                        order = _sessionStops.value.size + 1,
-                    )
+            when (val resolved = resolveAddress(address)) {
+                is Resolved.Fail -> failWith(resolved.reason)
+                is Resolved.Ok -> {
+                    val stop = newSessionStop(resolved, rawOcrText = address)
                     _sessionStops.value = _sessionStops.value + stop
                     succeedWith(stop)
                 }
-                is AiExtractionResult.Error -> {
-                    val reason = when (extracted.type) {
-                        AiExtractionResult.ErrorType.AddressNotFound -> "Address not found"
-                        AiExtractionResult.ErrorType.AuthError -> "Server auth error"
-                        AiExtractionResult.ErrorType.Timeout -> "Server timeout"
-                        AiExtractionResult.ErrorType.ConnectionError -> "Connection error"
-                    }
-                    failWith(reason)
-                }
             }
         }
+    }
+
+    /** Format raw label/manual text into a Colombian address, then geocode it. */
+    private suspend fun resolveAddress(rawText: String): Resolved {
+        val parsed = when (val result = ColombianAddressFormatter.format(rawText, _routeConfig.value.city)) {
+            is ColombianAddressFormatter.Result.Success -> result.address
+            ColombianAddressFormatter.Result.NoAddressFound -> return Resolved.Fail("No address detected")
+        }
+        return when (val geo = geocodingRepository.geocodeAddress(parsed.geocodeQuery)) {
+            is GeocodingResult.Success -> Resolved.Ok(
+                name = parsed.recipientName,
+                address = parsed.displayAddress,
+                lat = geo.lat,
+                lng = geo.lng,
+            )
+            is GeocodingResult.Error -> Resolved.Fail(
+                when (geo.type) {
+                    GeocodingResult.ErrorType.AddressNotFound -> "Address not found"
+                    GeocodingResult.ErrorType.ApiKeyError -> "Google API key error"
+                    GeocodingResult.ErrorType.ConnectionError -> "Connection error"
+                },
+            )
+        }
+    }
+
+    private fun newSessionStop(resolved: Resolved.Ok, rawOcrText: String): Stop {
+        val nextIndex = _sessionStops.value.size + 1
+        return Stop(
+            id = -nextIndex.toLong(),
+            routeId = 0L,
+            label = resolved.name ?: "Package #$nextIndex",
+            rawOcrText = rawOcrText,
+            address = resolved.address,
+            lat = resolved.lat,
+            lng = resolved.lng,
+            order = nextIndex,
+        )
+    }
+
+    private sealed class Resolved {
+        data class Ok(
+            val name: String?,
+            val address: String,
+            val lat: Double,
+            val lng: Double,
+        ) : Resolved()
+
+        data class Fail(val reason: String) : Resolved()
     }
 
     private fun succeedWith(stop: Stop) {
