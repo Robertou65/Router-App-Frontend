@@ -210,11 +210,10 @@ class CameraViewModel(
                     failed++
                     return@forEachIndexed
                 }
-                val label = outcome.name.ifBlank { "Package #${updatedStops.size + 1}" }
                 val stop = Stop(
                     id = -(updatedStops.size + 1L),
                     routeId = 0L,
-                    label = label,
+                    label = (updatedStops.size + 1).toString(),
                     rawOcrText = "",
                     address = outcome.address,
                     lat = outcome.lat ?: 0.0,
@@ -250,7 +249,7 @@ class CameraViewModel(
     fun removeSelectedStop() {
         val selectedId = _sessionPanelState.value.selectedStopId ?: return
         val remaining = _sessionStops.value.filterNot { it.id == selectedId }
-            .mapIndexed { index, stop -> stop.copy(order = index + 1) }
+            .mapIndexed { index, stop -> stop.copy(label = (index + 1).toString(), order = index + 1) }
         _sessionStops.value = remaining
         _sessionPanelState.value = _sessionPanelState.value.copy(selectedStopId = null)
     }
@@ -313,7 +312,7 @@ class CameraViewModel(
         return Stop(
             id = -nextIndex.toLong(),
             routeId = 0L,
-            label = resolved.name ?: "Package #$nextIndex",
+            label = nextIndex.toString(),
             rawOcrText = rawOcrText,
             address = resolved.address,
             lat = resolved.lat,
