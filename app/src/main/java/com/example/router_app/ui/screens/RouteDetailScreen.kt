@@ -6,14 +6,18 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Button
@@ -22,6 +26,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -57,8 +62,11 @@ fun RouteDetailScreen(
     val viewModel: RouteDetailViewModel = viewModel()
     val uiState by viewModel.uiState.collectAsState()
     val deletingStopIds by viewModel.deletingStopIds.collectAsState()
+    val editingStopIds by viewModel.editingStopIds.collectAsState()
     val context = LocalContext.current
     var stopPendingDelete by remember { mutableStateOf<Stop?>(null) }
+    var stopBeingEdited by remember { mutableStateOf<Stop?>(null) }
+    var editAddressText by remember { mutableStateOf("") }
     var selectedFolderUri by rememberSaveable { mutableStateOf<Uri?>(null) }
     var showLocationDialog by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
@@ -106,7 +114,28 @@ fun RouteDetailScreen(
         viewModel.load(routeId)
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+    // Surface edit outcomes: close the dialog and confirm on success, keep it open with
+    // the reason on error so the user can correct the address.
+    LaunchedEffect(Unit) {
+        viewModel.editEvents.collect { result ->
+            when (result) {
+                is RouteDetailViewModel.EditResult.Success -> {
+                    stopBeingEdited = null
+                    snackbarHostState.showSnackbar("Stop updated")
+                }
+                is RouteDetailViewModel.EditResult.Error -> {
+                    snackbarHostState.showSnackbar(result.reason)
+                }
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.systemBars)
+            .padding(16.dp),
+    ) {
         Text(
             text = uiState.route?.name ?: "Route Detail",
             style = MaterialTheme.typography.titleLarge,
@@ -156,9 +185,26 @@ fun RouteDetailScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
+                            val isEditingStop = editingStopIds.contains(stop.id)
+                            if (isEditingStop) {
+                                CircularProgressIndicator(modifier = Modifier.height(24.dp))
+                            } else {
+                                IconButton(
+                                    onClick = {
+                                        editAddressText = stop.address
+                                        stopBeingEdited = stop
+                                    },
+                                    enabled = !deletingStopIds.contains(stop.id),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = "Edit stop",
+                                    )
+                                }
+                            }
                             IconButton(
                                 onClick = { stopPendingDelete = stop },
-                                enabled = !deletingStopIds.contains(stop.id),
+                                enabled = !deletingStopIds.contains(stop.id) && !isEditingStop,
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Delete,
@@ -218,6 +264,43 @@ fun RouteDetailScreen(
             },
             dismissButton = {
                 Button(onClick = { stopPendingDelete = null }) {
+                    Text(text = "Cancel")
+                }
+            },
+        )
+    }
+
+    stopBeingEdited?.let { stop ->
+        val inFlight = editingStopIds.contains(stop.id)
+        AlertDialog(
+            onDismissRequest = { if (!inFlight) stopBeingEdited = null },
+            title = { Text(text = "Edit address") },
+            text = {
+                OutlinedTextField(
+                    value = editAddressText,
+                    onValueChange = { editAddressText = it },
+                    label = { Text(text = "Address") },
+                    placeholder = { Text(text = "e.g. Carrera 18b # 32-06 Sur, Bogotá") },
+                    singleLine = false,
+                    maxLines = 3,
+                    enabled = !inFlight,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.editStop(stop.id, editAddressText.trim()) },
+                    enabled = editAddressText.isNotBlank() && !inFlight,
+                ) {
+                    if (inFlight) {
+                        CircularProgressIndicator(modifier = Modifier.height(20.dp))
+                    } else {
+                        Text(text = "Save")
+                    }
+                }
+            },
+            dismissButton = {
+                Button(onClick = { stopBeingEdited = null }, enabled = !inFlight) {
                     Text(text = "Cancel")
                 }
             },

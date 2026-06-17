@@ -4,9 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.router_app.data.format.ColombianAddressFormatter
-import com.example.router_app.data.geocoding.GeocodingRepository
-import com.example.router_app.data.geocoding.GeocodingResult
+import com.example.router_app.data.format.AddressResolver
 import com.example.router_app.data.local.Stop
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -23,7 +21,7 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 class CameraViewModel(
-    private val geocodingRepository: GeocodingRepository = GeocodingRepository(),
+    private val addressResolver: AddressResolver = AddressResolver(),
 ) : ViewModel() {
     data class RouteConfig(
         val routeName: String = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()).format(Date()),
@@ -148,7 +146,7 @@ class CameraViewModel(
             val asyncResults = withContext(Dispatchers.IO) {
                 coroutineScope {
                     pendingRows.map { row ->
-                        async { row to resolveAddress(row.address) }
+                        async { row to addressResolver.resolve(row.address, _routeConfig.value.city) }
                     }.awaitAll()
                 }
             }
@@ -182,7 +180,7 @@ class CameraViewModel(
 
             asyncResults.forEach { (row, resolved) ->
                 when (resolved) {
-                    is Resolved.Ok -> outcomes.add(
+                    is AddressResolver.Result.Ok -> outcomes.add(
                         CsvOutcome(
                             index = row.index,
                             name = row.name.ifBlank { resolved.name.orEmpty() },
@@ -192,7 +190,7 @@ class CameraViewModel(
                             success = true,
                         )
                     )
-                    is Resolved.Fail -> outcomes.add(
+                    is AddressResolver.Result.Fail -> outcomes.add(
                         CsvOutcome(
                             index = row.index,
                             name = row.name,
@@ -274,9 +272,9 @@ class CameraViewModel(
         _scanState.value = ScanState.Extracting
 
         viewModelScope.launch {
-            when (val resolved = resolveAddress(text)) {
-                is Resolved.Fail -> failWith(resolved.reason)
-                is Resolved.Ok -> {
+            when (val resolved = addressResolver.resolve(text, _routeConfig.value.city)) {
+                is AddressResolver.Result.Fail -> failWith(resolved.reason)
+                is AddressResolver.Result.Ok -> {
                     val stop = newSessionStop(resolved, rawOcrText = text)
                     _sessionStops.value = _sessionStops.value + stop
                     succeedWith(stop)
@@ -299,9 +297,9 @@ class CameraViewModel(
         _scanState.value = ScanState.Extracting
 
         viewModelScope.launch {
-            when (val resolved = resolveAddress(address)) {
-                is Resolved.Fail -> failWith(resolved.reason)
-                is Resolved.Ok -> {
+            when (val resolved = addressResolver.resolve(address, _routeConfig.value.city)) {
+                is AddressResolver.Result.Fail -> failWith(resolved.reason)
+                is AddressResolver.Result.Ok -> {
                     val stop = newSessionStop(resolved, rawOcrText = address)
                     _sessionStops.value = _sessionStops.value + stop
                     succeedWith(stop)
@@ -310,30 +308,7 @@ class CameraViewModel(
         }
     }
 
-    /** Format raw label/manual text into a Colombian address, then geocode it. */
-    private suspend fun resolveAddress(rawText: String): Resolved {
-        val parsed = when (val result = ColombianAddressFormatter.format(rawText, _routeConfig.value.city)) {
-            is ColombianAddressFormatter.Result.Success -> result.address
-            ColombianAddressFormatter.Result.NoAddressFound -> return Resolved.Fail("No address detected")
-        }
-        return when (val geo = geocodingRepository.geocodeAddress(parsed.geocodeQuery)) {
-            is GeocodingResult.Success -> Resolved.Ok(
-                name = parsed.recipientName,
-                address = parsed.displayAddress,
-                lat = geo.lat,
-                lng = geo.lng,
-            )
-            is GeocodingResult.Error -> Resolved.Fail(
-                when (geo.type) {
-                    GeocodingResult.ErrorType.AddressNotFound -> "Address not found"
-                    GeocodingResult.ErrorType.ApiKeyError -> "Google API key error"
-                    GeocodingResult.ErrorType.ConnectionError -> "Connection error"
-                },
-            )
-        }
-    }
-
-    private fun newSessionStop(resolved: Resolved.Ok, rawOcrText: String): Stop {
+    private fun newSessionStop(resolved: AddressResolver.Result.Ok, rawOcrText: String): Stop {
         val nextIndex = _sessionStops.value.size + 1
         return Stop(
             id = -nextIndex.toLong(),
@@ -345,17 +320,6 @@ class CameraViewModel(
             lng = resolved.lng,
             order = nextIndex,
         )
-    }
-
-    private sealed class Resolved {
-        data class Ok(
-            val name: String?,
-            val address: String,
-            val lat: Double,
-            val lng: Double,
-        ) : Resolved()
-
-        data class Fail(val reason: String) : Resolved()
     }
 
     private fun succeedWith(stop: Stop) {
@@ -398,4 +362,18 @@ class CameraViewModel(
         result.add(current.toString())
         return result
     }
+}
+
+/** A session stop paired with its real 1-based position in the session. */
+data class NumberedStop(val number: Int, val stop: Stop)
+
+/**
+ * The most recent [windowSize] stops as a sliding window, each tagged with its real
+ * position in the session (e.g. after 5 scans → stops numbered 3, 4, 5), ordered
+ * oldest→newest. Drives the camera overlay's "last three scans" summary.
+ */
+fun recentStopsWindow(stops: List<Stop>, windowSize: Int = 3): List<NumberedStop> {
+    val window = stops.takeLast(windowSize)
+    val firstNumber = stops.size - window.size + 1
+    return window.mapIndexed { index, stop -> NumberedStop(firstNumber + index, stop) }
 }

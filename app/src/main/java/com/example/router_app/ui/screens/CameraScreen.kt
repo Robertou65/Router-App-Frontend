@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -66,6 +67,7 @@ import com.example.router_app.data.ocr.OcrTextAnalyzer
 import com.example.router_app.data.ocr.ScanRegion
 import com.example.router_app.data.local.Stop
 import com.example.router_app.ui.camera.CameraViewModel
+import com.example.router_app.ui.camera.recentStopsWindow
 
 @Composable
 @OptIn(ExperimentalPermissionsApi::class)
@@ -167,7 +169,7 @@ private fun CameraScreenContent(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .statusBarsPadding()
+                    .systemBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.SpaceBetween,
             ) {
@@ -297,9 +299,9 @@ private fun SessionSummaryBar(
                 Text(text = "No scans yet", style = MaterialTheme.typography.bodyMedium, color = Color.White)
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    sessionStops.take(3).forEachIndexed { index, stop ->
+                    recentStopsWindow(sessionStops).forEach { (number, stop) ->
                         Text(
-                            text = "${index + 1}. ${stop.address}",
+                            text = "$number. ${stop.address}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color.White,
                         )
